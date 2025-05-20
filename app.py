@@ -31,12 +31,10 @@ st.markdown("""
 <h1 style='color:#c82832;'>MAP MRKTG POLE PERF NXT</h1>
 """, unsafe_allow_html=True)
 
-# Chargement des données depuis Dropbox
+# Chargement des données depuis fichier local
 @st.cache_data
 def load_data():
-    url = "https://www.dropbox.com/scl/fi/ibywg3tlsj6zuo298yc0r/communes.csv?rlkey=x1w3sn17cym08rz0bq2t0pujd&st=qg80q7jx&dl=1"
-    df = pd.read_csv(url, dtype=str)
-    st.write("Colonnes du fichier chargé :", df.columns.tolist())  # Affiche les colonnes pour debug
+    df = pd.read_csv("communes.csv", dtype=str)  # fichier dans le même dossier que app.py
     # Conversion latitude et longitude en float
     df["latitude"] = df["latitude"].astype(float)
     df["longitude"] = df["longitude"].astype(float)
