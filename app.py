@@ -1,80 +1,81 @@
 import streamlit as st
-import pandas as pd
+import requests
 from geopy.distance import geodesic
+import pandas as pd
 import pydeck as pdk
-import os
-
-# Protection par mot de passe
-def check_password():
-    def password_entered():
-        if st.session_state["password"] == os.getenv("APP_PASSWORD"):
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]
-        else:
-            st.session_state["password_correct"] = False
-
-    if "password_correct" not in st.session_state:
-        st.text_input("Mot de passe", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Mot de passe", type="password", on_change=password_entered, key="password")
-        st.error("Mot de passe incorrect")
-        return False
-    else:
-        return True
-
-if not check_password():
-    st.stop()
 
 # Titre
 st.markdown("<h1 style='color:#c82832;'>MAP MRKTG POLE PERF NXT</h1>", unsafe_allow_html=True)
 
-# Chargement des données
+# Fonction pour obtenir les coordonnées d’une ville
+def get_commune_info(ville_input):
+    url = f"https://geo.api.gouv.fr/communes?nom={ville_input}&fields=nom,code,codePostal,centre&format=json&geometry=centre"
+    r = requests.get(url)
+    data = r.json()
+    if not data:
+        return None
+    commune = data[0]
+    return {
+        "nom": commune["nom"],
+        "code_postal": commune.get("codePostal", ""),
+        "latitude": commune["centre"]["coordinates"][1],
+        "longitude": commune["centre"]["coordinates"][0]
+    }
+
+# Fonction pour obtenir toutes les communes de France (coordonnées)
 @st.cache_data
-def load_data():
-    try:
-        df = pd.read_csv("communes.csv", encoding="utf-8-sig", dtype=str)
-        df = df[['nom', 'code_postal', 'latitude', 'longitude']]  # s'assurer des colonnes
-        df["latitude"] = df["latitude"].astype(float)
-        df["longitude"] = df["longitude"].astype(float)
-        return df
-    except Exception as e:
-        st.error(f"Erreur lors du chargement du fichier CSV : {e}")
-        return pd.DataFrame()
+def get_all_communes():
+    url = "https://geo.api.gouv.fr/communes?fields=nom,code,codePostal,centre&format=json&geometry=centre"
+    r = requests.get(url)
+    data = r.json()
+    cleaned = []
+    for c in data:
+        try:
+            lat = c["centre"]["coordinates"][1]
+            lon = c["centre"]["coordinates"][0]
+            cleaned.append({
+                "nom": c["nom"],
+                "code_postal": c.get("codePostal", ""),
+                "latitude": lat,
+                "longitude": lon
+            })
+        except:
+            continue
+    return pd.DataFrame(cleaned)
 
-communes = load_data()
-if communes.empty:
-    st.stop()
-
-# Entrée utilisateur
+# Interface
 ville_input = st.text_input("Entrez le nom de la ville ou son code postal :", "Aubervilliers")
 rayon = st.slider("Rayon de recherche (km) :", 1, 50, 10)
 
 # Recherche
-ville_ref = communes[
-    (communes['nom'].str.lower() == ville_input.lower()) | (communes['code_postal'] == ville_input)
-]
+if ville_input:
+    ref = get_commune_info(ville_input)
 
-if ville_ref.empty:
-    st.warning("Ville non trouvée. Veuillez vérifier le nom ou le code postal.")
-else:
-    ref = ville_ref.iloc[0]
+    if not ref:
+        st.warning("Ville non trouvée via l'API. Vérifiez l'orthographe.")
+        st.stop()
+
     ref_coords = (ref['latitude'], ref['longitude'])
+    df = get_all_communes()
 
+    # Calcul des distances
     def calc_distance(row):
-        return geodesic(ref_coords, (row['latitude'], row['longitude'])).km
+        return geodesic(ref_coords, (row["latitude"], row["longitude"])).km
 
-    communes['distance_km'] = communes.apply(calc_distance, axis=1)
-    communes_filtrees = communes[(communes['distance_km'] <= rayon) & (communes['nom'] != ref['nom'])]
+    df["distance_km"] = df.apply(calc_distance, axis=1)
+    communes_filtrees = df[(df["distance_km"] <= rayon) & (df["nom"] != ref["nom"])]
     communes_filtrees = communes_filtrees.sort_values("distance_km")
 
-    st.subheader(f"Communes dans un rayon de {rayon} km autour de {ref['nom']} ({ref['code_postal']}):")
-    st.dataframe(communes_filtrees[['nom', 'code_postal', 'distance_km']])
+    # Résultat
+    st.subheader(f"Communes dans un rayon de {rayon} km autour de {ref['nom']} ({ref['code_postal']})")
+    st.dataframe(communes_filtrees[["nom", "code_postal", "distance_km"]])
 
-    csv = communes_filtrees[['nom', 'code_postal', 'distance_km']].to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Télécharger les résultats en CSV", data=csv, file_name='communes_proches.csv', mime='text/csv')
+    # Export CSV
+    csv = communes_filtrees[["nom", "code_postal", "distance_km"]].to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Télécharger en CSV", data=csv, file_name="communes_proches.csv", mime="text/csv")
 
-    st.subheader("Carte interactive des communes")
+    # Carte
+    st.subheader("Carte interactive")
     layer = pdk.Layer(
         "ScatterplotLayer",
         data=communes_filtrees,
@@ -83,9 +84,12 @@ else:
         get_fill_color='[0, 100, 200, 160]',
         pickable=True,
     )
-
-    view_state = pdk.ViewState(latitude=ref['latitude'], longitude=ref['longitude'], zoom=10, pitch=0)
-
+    view_state = pdk.ViewState(
+        latitude=ref["latitude"],
+        longitude=ref["longitude"],
+        zoom=9,
+        pitch=0
+    )
     st.pydeck_chart(pdk.Deck(
         layers=[layer],
         initial_view_state=view_state,
